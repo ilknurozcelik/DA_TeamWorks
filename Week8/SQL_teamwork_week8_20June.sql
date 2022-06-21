@@ -15,6 +15,7 @@ pivot
 	sum(cum_total_turnover)
 	for ord_year in ([2018], [2019], [2020]))as pivot_table;
 
+-- bu kod yukarýdakinin aynýsý
 select *
 from(
 	select distinct year(so.order_date)ord_year, month(so.order_date)ord_month,
@@ -37,33 +38,88 @@ pivot(
  from sale.order_item as soý, sale.orders as so
  where soý.order_id=so.order_id
 
- select A.product_id, customer_id, count(A.customer_id)count_cust
+-- her bir ürünü alan müþteri sayýsý
+ select so.customer_id, soý.product_id,
+	count(*) over(partition by soý.product_id)count_cust_for_product
+ from sale.order_item as soý, sale.orders as so
+ where soý.order_id=so.order_id
+
+ -- ayný ürünü tekrar almýþ müþteriler
+
+ select customer_id, product_id, count(A.customer_id)count_cust
  from(
  select soý.product_id, so.customer_id, so.order_id,
 	count(*) over(partition by soý.product_id, so.customer_id, so.order_id)count_
  from sale.order_item as soý, sale.orders as so
  where soý.order_id=so.order_id) A
- group by product_id, customer_id
- having count(A.customer_id)>=2
- order by 1
+ group by customer_id, product_id
+ having count(A.customer_id)>1
 
- --en az bir ürün almýþ müþteriler
+--þimdi iki tabloyu birleþtirelim.
+ 
+select A.customer_id, A.product_id, A.count_cust_for_product, B.count_cust,
+	cast(1.0 * (case when B.count_cust is null then 0 else B.count_cust end) / A.count_cust_for_product as decimal(3,2))
+from (
+	select so.customer_id, soý.product_id,
+		count(*) over(partition by soý.product_id)count_cust_for_product
+	 from sale.order_item as soý, sale.orders as so
+	 where soý.order_id=so.order_id) A
+ left join (
+	 select customer_id, product_id, count(A.customer_id)count_cust
+	 from(
+	 select soý.product_id, so.customer_id, so.order_id,
+		count(*) over(partition by soý.product_id, so.customer_id, so.order_id)count_
+	 from sale.order_item as soý, sale.orders as so
+	 where soý.order_id=so.order_id) A
+	 group by customer_id, product_id
+	 having count(A.customer_id)>1) B 
+on A.customer_id=B.customer_id;
 
- select customer_id, count(A.customer_id)count_cust
- from(
- select soý.product_id, so.customer_id, so.order_id,
-	count(*) over(partition by soý.product_id, so.customer_id, so.order_id)count_
- from sale.order_item as soý, sale.orders as so
- where soý.order_id=so.order_id) A
- group by customer_id
- having count(A.customer_id)=1
- order by 1
+--sütunlarý düzenleyelim ve customer_id'ye göre sýralayalým
+select distinct A.product_id,
+	cast(1.0 * (case when B.count_cust is null then 0 else B.count_cust end) / A.count_cust_for_product as decimal(3,2))
+from (
+	select distinct so.customer_id, soý.product_id,
+		count(*) over(partition by soý.product_id)count_cust_for_product
+	 from sale.order_item as soý, sale.orders as so
+	 where soý.order_id=so.order_id) A
+ left join (
+	 select customer_id, product_id, count(A.customer_id)count_cust
+	 from(
+	 select soý.product_id, so.customer_id, so.order_id,
+		count(*) over(partition by soý.product_id, so.customer_id, so.order_id)count_
+	 from sale.order_item as soý, sale.orders as so
+	 where soý.order_id=so.order_id) A
+	 group by customer_id, product_id
+	 having count(A.customer_id)>1) B 
+on A.product_id=B.product_id
+order by 1;
 
+-- Yukarýdaki çözümü bir de case ile yapalým:
 
-select count(distinct customer_id)
+with tbl as(
+select distinct soý.product_id,
+	count(customer_id) over(partition by soý.product_id, so.customer_id)count_same_product,
+	count(*) over(partition by soý.product_id)total_customer_per_product
 from sale.order_item as soý, sale.orders as so
 where soý.order_id=so.order_id
+)
+select product_id,
+	cast(1.0 *(case when count_same_product = 1 then 0 else count_same_product end)/total_customer_per_product as decimal(3,2))
+from tbl
 
+--yukarýdaki kodu bir de IIF ile yapalým.
+
+with tbl2 as(
+select distinct soý.product_id,
+	count(customer_id) over(partition by soý.product_id, so.customer_id)count_same_product,
+	count(*) over(partition by soý.product_id)total_customer_per_product
+from sale.order_item as soý, sale.orders as so
+where soý.order_id=so.order_id
+)
+select product_id,
+	cast((1.0 *IIF(count_same_product=1, 0, count_same_product)/total_customer_per_product) as decimal(3,2))
+from tbl2;
 
 -- SERDAR HOCA'NIN KODU
 
@@ -112,6 +168,16 @@ on v2.product_id = v1.product_id
 )
 select product_id, cast(1.0*(case when morethan1 is null then 0 else morethan1 end) /total_customer_for_product   as numeric(5,2)) as rate
 from tbl;
+
+
+-- HOCA ÇÖZÜMÜ
+
+SELECT	soi.product_id,
+		CAST(1.0*(COUNT(so.customer_id) - COUNT(DISTINCT so.customer_id))/COUNT(so.customer_id) AS DECIMAL(3,2)) per_of_cust_pur
+FROM	sale.order_item soi, sale.orders so
+		WHERE	soi.order_id = so.order_id		
+GROUP BY soi.product_id
+
 
 /*From the following table of user IDs, actions, and dates, write a query to return the publication
 and cancellation rate for each user. */
